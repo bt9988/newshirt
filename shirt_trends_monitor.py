@@ -31,8 +31,14 @@ from pytrends.request import TrendReq
 # --- Configuration ---
 SEEN_FILE = 'seen_trends.json'
 KEYWORD = 'shirt'
-TIMEFRAME = 'now 4-H'  # Last 4 hours to catch immediate trends
-GEO = 'US'             # Default to US, change to '' for worldwide
+# 'now 1-d' (Past 24 hours) is best for detecting meaningful daily breakouts 
+# without the noise of 'now 4-H' or the staleness of 'now 7-d'.
+TIMEFRAME = 'now 1-d'  
+GEO = 'US'             
+
+# Minimum growth % to be considered "Trending". 
+# Google Trends 'Breakout' is >5000%, but we want to catch things earlier too.
+MIN_GROWTH_PERCENT = 60 
 
 # Filter Rules
 EXCLUDED_COLORS = {
@@ -45,7 +51,7 @@ EXCLUDED_MATERIALS = {
 }
 
 EXCLUDED_BRANDS = {
-    'supreme', 'bape', 'hardy', 'custom', 'nike', 'adidas', 'armour', 'under', 'emotions', 'punisher', 'social', 'karl', 'spiderman', 'chanel', 
+    'supreme', 'bape', 'gucci', 'nike', 'adidas'
 }
 
 # --- Setup Logging ---
@@ -102,11 +108,8 @@ class TrendMonitor:
             return False
 
         # 2. Exclusion checks
-        # Helper to check if any word in a set exists as a substring in the phrase
         def contains_excluded(excluded_set: Set[str]) -> bool:
             for item in excluded_set:
-                # We use word boundary check logic simply by checking inclusion
-                # For stricter matching, regex could be used, but simple inclusion is safer for "redshirt"
                 if item in lower_phrase:
                     return True
             return False
@@ -125,10 +128,11 @@ class TrendMonitor:
 
         return True
 
-    def fetch_rising_queries(self) -> List[Dict]:
+    def fetch_newly_trending(self) -> List[Dict]:
         """
-        Queries Google Trends for 'related queries' to the keyword 'shirt'.
-        Returns a list of dictionaries containing the query and value.
+        Queries Google Trends.
+        CRITICAL: Filters out 'Top' queries to ensure we only get queries that are 
+        truly 'Rising' and not just established high-volume terms.
         """
         try:
             self.pytrends.build_payload([KEYWORD], cat=0, timeframe=TIMEFRAME, geo=GEO)
@@ -138,15 +142,44 @@ class TrendMonitor:
                 logger.warning("Empty response from Google Trends API.")
                 return []
 
-            # 'rising' contains queries with significant recent growth
+            # 1. Get 'Top' queries (Established, Old Trends)
+            top_df = related[KEYWORD]['top']
+            established_queries = set()
+            if top_df is not None and not top_df.empty:
+                # Store as lowercase for easy comparison
+                established_queries = set(top_df['query'].str.lower().tolist())
+                logger.info(f"Loaded {len(established_queries)} established 'Top' queries to exclude.")
+
+            # 2. Get 'Rising' queries (Potential New Trends)
             rising_df = related[KEYWORD]['rising']
             
             if rising_df is None or rising_df.empty:
                 logger.info("No rising trends found currently.")
                 return []
 
-            # Convert DataFrame to list of dicts for easier processing
-            return rising_df.to_dict('records')
+            results = []
+            for _, row in rising_df.iterrows():
+                query = row['query']
+                value = row['value']
+                
+                # Check 1: Is it an established 'old' trend?
+                if query.lower() in established_queries:
+                    # Skip it. It's popular, but not "newly" trending.
+                    continue
+                
+                # Check 2: Does it meet growth thresholds?
+                is_breakout = str(value).lower() == 'breakout'
+                if not is_breakout:
+                    try:
+                        growth = int(value)
+                        if growth < MIN_GROWTH_PERCENT:
+                            continue
+                    except ValueError:
+                        continue
+                
+                results.append({'query': query, 'value': value})
+
+            return results
 
         except Exception as e:
             logger.error(f"API Error fetching trends: {e}")
@@ -155,13 +188,12 @@ class TrendMonitor:
     def send_telegram_alert(self, phrase: str, growth_value):
         """Sends a formatted message to the configured Telegram channel."""
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        growth_str = "BREAKOUT" if str(growth_value).lower() == 'breakout' else f"+{growth_value}%"
+        growth_str = "BREAKOUT 🚀" if str(growth_value).lower() == 'breakout' else f"+{growth_value}% 📈"
         
         message = (
             f"👕 <b>NEW TREND DETECTED</b>\n\n"
             f"Phrase: <b>{phrase.title()}</b>\n"
             f"Growth: {growth_str}\n"
-            f"Status: RISING\n"
             f"Time: {timestamp}"
         )
 
@@ -185,19 +217,20 @@ class TrendMonitor:
         """Main execution flow."""
         logger.info("Starting trend scan...")
         
-        potential_trends = self.fetch_rising_queries()
+        # Use the refined fetch method
+        new_candidates = self.fetch_newly_trending()
         
         new_trends_found = 0
         
-        for item in potential_trends:
+        for item in new_candidates:
             query = item['query']
-            value = item['value']  # Growth % or 'Breakout'
+            value = item['value']
 
-            # 1. Check if already processed
+            # 1. Check if already processed (Deduplication)
             if query in self.seen_phrases:
                 continue
 
-            # 2. Check filters (Colors, Materials, Brands)
+            # 2. Check content filters (Colors, Materials, Brands)
             if self.is_valid_phrase(query):
                 # 3. Alert
                 self.send_telegram_alert(query, value)
@@ -206,9 +239,6 @@ class TrendMonitor:
                 self.seen_phrases.add(query)
                 new_trends_found += 1
             else:
-                # Optional: Add invalid phrases to seen to skip re-processing logic next time?
-                # No, because a phrase might become valid if we change logic later. 
-                # For now, we only persist alerted ones to avoid spam.
                 pass
 
         if new_trends_found > 0:
