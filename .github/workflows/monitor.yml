@@ -1,0 +1,51 @@
+name: Shirt Trends Monitor
+
+on:
+  schedule:
+    - cron: '0 */3 * * *'  # Runs every 3 hours at minute 0
+  workflow_dispatch:      # Allows manual trigger from the Actions tab
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    
+    # Permissions required to commit 'seen_trends.json' back to the repo
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Monitor Script
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+        run: python shirt_trends_monitor.py
+
+      - name: Commit state changes
+        # Only commits if seen_trends.json has changed (new trends found)
+        run: |
+          git config --global user.name 'TrendBot'
+          git config --global user.email 'bot@noreply.github.com'
+          
+          # Add the tracking file
+          git add seen_trends.json
+          
+          # Check if there are changes staged
+          if git diff --staged --quiet; then
+            echo "No new trends found or saved. Skipping commit."
+          else
+            git commit -m "Update seen trends [skip ci]"
+            git push
+          fi
