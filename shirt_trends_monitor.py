@@ -45,7 +45,7 @@ EXCLUDED_MATERIALS = {
 }
 
 EXCLUDED_BRANDS = {
-    'supreme', 'bape'
+    'supreme', 'bape', 'hardy', 'custom', 'nike', 'adidas', 'armour', 'under', 'emotions', 'punisher', 'social', 'karl', 'spiderman', 'chanel', 
 }
 
 # --- Setup Logging ---
