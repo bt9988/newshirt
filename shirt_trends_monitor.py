@@ -51,7 +51,7 @@ EXCLUDED_MATERIALS = {
 }
 
 EXCLUDED_BRANDS = {
-    'supreme', 'bape', 'gucci', 'nike', 'adidas'
+    'supreme', 'bape', , 'brandy', 'hollister', 'knicks', 'spurs', 'westwood', 'vietnamese', 'arsenall', 'conor', 'old navy', 'drake', 'markle', 'gucci', 'nike', 'adidas'
 }
 
 # --- Setup Logging ---
